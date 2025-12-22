@@ -21,40 +21,41 @@ Unlike traditional Zygisk modules that require rebuilding and rebooting the devi
 Zygisk-Loader separates the **Injector** (The Module) from the **Payload** (The Logic).
 
 ```mermaid
-flowchart TD
-    %% Subgraph untuk File System (Host Side)
-    subgraph Storage ["/data/adb/modules/geoink/"]
-        style Storage fill:#f9f9f9,stroke:#333,stroke-width:2px
-        Config["active_config.txt"]
-        PayloadBin["payload.so (Rust/C++)"]
+flowchart LR
+    %% Area Eksternal (User/CLI)
+    subgraph Manager [" Control Plane (Synapse/ADB) "]
+        CLI[CLI Tool]
     end
 
-    %% Subgraph untuk Proses Aplikasi (Runtime)
-    subgraph Runtime ["Android Application Process"]
-        style Runtime fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
-
-        AppStart((App Start)) --> ZygiskHook[Zygisk Framework]
-        ZygiskHook --> Loader["Zygisk-Loader (Resident)"]
-
-        Loader -->|Read /proc/self/cmdline| CheckName{Is Target?}
-        Loader -.->|Read| Config
-
-        CheckName -- No --> Ignore[Do Nothing / Exit]
-        CheckName -- Yes --> Inject[dlopen / Inject]
-
-        Inject -->|Load Dynamic Lib| PayloadBin
-        PayloadBin -.->|Map into Memory| RunningPayload["Running Payload\n(Hooks / SSL Unpinning)"]
+    %% Area Penyimpanan File
+    subgraph Storage [" /data/adb/modules/geoink/ "]
+        Config[("active_config.txt")]
+        Payload[("payload.so")]
     end
 
-    %% External Interaction
-    Synapse[Synapse CLI / User] -->|1. Write Target| Config
-    Synapse -->|2. Deploy Lib| PayloadBin
-    Synapse -->|3. Restart App| AppStart
+    %% Area Proses Aplikasi
+    subgraph Process [" Target Process Memory "]
+        Start((App Start))
+        Loader[Zygisk-Loader]
+        Decision{Target Match?}
+        Action[dlopen]
+        Logic[Rust Payload]
+    end
 
-    %% Styling
-    style Loader fill:#dea,stroke:#869D05,stroke-width:2px
-    style RunningPayload fill:#ffccbc,stroke:#bf360c,stroke-width:2px,stroke-dasharray: 5 5
-    style Synapse fill:#333,stroke:#fff,color:#fff
+    %% Alur Panah
+    CLI -->|Write| Config
+    CLI -->|Update| Payload
+    CLI -->|Restart| Start
+
+    Start --> Loader
+    Loader -->|Read| Config
+    Loader --> Decision
+
+    Decision -- No --> Ignore[Idle]
+    Decision -- Yes --> Action
+    
+    Action -->|Load| Payload
+    Payload -.->|Inject| Logic
 ```
 
 ## Usage
