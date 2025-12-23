@@ -17,11 +17,11 @@ use log::Level;
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::ptr;
+use std::sync::OnceLock;
 
 pub use api::ZygiskApi;
 pub use binding::{AppSpecializeArgs, ServerSpecializeArgs, StateFlags, ZygiskOption, API_VERSION};
-use jni::JNIEnv;
+use jni::{JNIEnv, JavaVM};
 pub use module::ZygiskModule;
 
 // Path Config & Loader
@@ -33,25 +33,43 @@ crate::zygisk_module!(&MODULE);
 
 struct ZygiskLoaderModule {}
 
+// Static variable to store JavaVM
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
 impl ZygiskModule for ZygiskLoaderModule {
-    fn on_load(&self, api: ZygiskApi, _env: JNIEnv) {
+    fn on_load(&self, _api: ZygiskApi, env: JNIEnv) {
         #[cfg(target_os = "android")]
         android_logger::init_once(
             Config::default()
                 .with_min_level(Level::Debug) // Changed to Debug for more detailed logs
                 .with_tag("Zygisk_Loader"),
         );
-        info!("Zygisk-Loader Loaded (on_load).");
+
+        // Store the JavaVM and not JNIEnv (JNIEnv is thread/process specific)
+        let vm = env.get_java_vm().expect("Failed to get JavaVM");
+        let _ = JAVA_VM.set(vm); // Set once at startup
+
+        info!("Zygisk-Loader Loaded (on_load). JavaVM stored.");
     }
 
-    fn post_app_specialize(&self, _api: ZygiskApi, _args: &AppSpecializeArgs) {
-        // 1. Get Process Name
-        let current_process = match get_process_name() {
-            Ok(name) => name,
-            Err(e) => {
-                error!("Failed to read /proc/self/cmdline: {:?}", e);
-                return;
+    fn post_app_specialize(&self, _api: ZygiskApi, args: &AppSpecializeArgs) {
+        // Get process name from AppSpecializeArgs using a valid JNIEnv for this process
+        let current_process = get_process_name_from_args_safe(args);
+
+        // If we couldn't get the process name from args, fall back to /proc/self/cmdline
+        let current_process = if current_process.is_empty() {
+            match get_process_name() {
+                Ok(name) => {
+                    debug!("Falling back to /proc/self/cmdline: '{}'", name);
+                    name
+                },
+                Err(e) => {
+                    error!("Failed to read /proc/self/cmdline: {:?}", e);
+                    return;
+                }
             }
+        } else {
+            current_process
         };
 
         // (This will spam logcat a bit, but important for diagnosis)
@@ -119,6 +137,70 @@ unsafe fn inject_payload(path: &str) {
     } else {
         info!("Payload successfully loaded! Handle: {:p}", handle);
     }
+}
+
+// Helper function to extract process name from AppSpecializeArgs
+// This function gets a valid JNIEnv for the current process and extracts the string
+fn get_process_name_from_args_safe(args: &AppSpecializeArgs) -> String {
+    // Try to get JavaVM and attach to current thread to get valid JNIEnv
+    if let Some(vm) = JAVA_VM.get() {
+        match vm.attach_current_thread_as_daemon() {
+            Ok(env) => {
+                // First try to get the process name from nice_name (usually the package name or process name)
+                // args.nice_name is &mut JString<'a>. We need to dereference it (*args.nice_name)
+                // to get JString that can be owned by env.get_string.
+                let nice_name_jstring = *args.nice_name;
+                if let Ok(nice_name_str) = env.get_string(nice_name_jstring) {
+                    let nice_name_rust: String = nice_name_str.into();
+                    if !nice_name_rust.is_empty() {
+                        debug!("Got process name from nice_name: '{}'", nice_name_rust);
+                        return nice_name_rust;
+                    }
+                }
+
+                // If nice_name is empty, try to get from app_data_dir
+                // args.app_data_dir is &mut JString<'a>. We need to dereference it (*args.app_data_dir)
+                // to get JString that can be owned by env.get_string.
+                let app_data_dir_jstring = *args.app_data_dir;
+                if let Ok(app_data_dir_str) = env.get_string(app_data_dir_jstring) {
+                    // Perbaikan: Tambahkan anotasi tipe String juga di sini
+                    let app_data_dir_rust: String = app_data_dir_str.into();
+                    if !app_data_dir_rust.is_empty() {
+                        // Extract package name from app_data_dir path
+                        // Format is typically: /data/user/0/com.android.chrome or /data/data/com.example.package
+                        let package_name = extract_package_from_path(&app_data_dir_rust);
+                        if !package_name.is_empty() {
+                            debug!("Got process name from app_data_dir: '{}'", package_name);
+                            return package_name;
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                error!("Failed to attach JVM in post_app_specialize: {:?}", e);
+            }
+        }
+    } else {
+        error!("JavaVM not initialized");
+    }
+
+    // If both fail, return empty string (fallback will use /proc/self/cmdline)
+    String::new()
+}
+
+// Helper function to extract package name from app data directory path
+fn extract_package_from_path(path: &str) -> String {
+    // Path format: /data/user/0/com.android.chrome or /data/data/com.example.package
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() >= 3 {
+        // Get the last non-empty part which should be the package name
+        for part in parts.iter().rev() {
+            if !part.is_empty() {
+                return part.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]
