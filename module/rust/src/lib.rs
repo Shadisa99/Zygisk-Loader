@@ -17,6 +17,7 @@ use log::LevelFilter;
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::sync::OnceLock;
 
 pub use api::ZygiskApi;
@@ -24,9 +25,9 @@ pub use binding::{AppSpecializeArgs, ServerSpecializeArgs, StateFlags, ZygiskOpt
 use jni::{JNIEnv, JavaVM};
 pub use module::ZygiskModule;
 
-// Path Config & Loader
+// config & payload path
 const CONFIG_PATH: &str = "/data/adb/modules/zygisk-loader/active_config.txt";
-const PAYLOAD_PATH: &str = "/data/adb/modules/zygisk-loader/payload.so";
+const PAYLOAD_FILENAME: &str = "payload.so";
 
 static MODULE: ZygiskLoaderModule = ZygiskLoaderModule {};
 crate::zygisk_module!(&MODULE);
@@ -36,138 +37,166 @@ struct ZygiskLoaderModule {}
 // Static variable to store JavaVM
 static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
 
+// Static variable to store config
+static TARGET_CONFIG: OnceLock<String> = OnceLock::new();
+
+// Save the File Descriptor (FD) of the payload
+static PAYLOAD_FD: OnceLock<i32> = OnceLock::new();
+
 impl ZygiskModule for ZygiskLoaderModule {
     fn on_load(&self, _api: ZygiskApi, env: JNIEnv) {
         #[cfg(target_os = "android")]
         android_logger::init_once(
             Config::default()
-                .with_max_level(LevelFilter::Debug) // Changed to Debug for more detailed logs
+                .with_max_level(LevelFilter::Debug)
                 .with_tag("Zygisk_Loader"),
         );
 
-        // Store the JavaVM and not JNIEnv (JNIEnv is thread/process specific)
         let vm = env.get_java_vm().expect("Failed to get JavaVM");
-        let _ = JAVA_VM.set(vm); // Set once at startup
+        let _ = JAVA_VM.set(vm);
+        info!("Zygisk-Loader Loaded.");
+    }
 
-        info!("Zygisk-Loader Loaded (on_load). JavaVM stored.");
+    fn pre_app_specialize(&self, api: ZygiskApi, args: &mut AppSpecializeArgs) {
+        // 1. Read Config
+        if let Ok(target) = read_target_config() {
+            let _ = TARGET_CONFIG.set(target);
+        }
+
+        // 2. Prepare Payload via FD (File Descriptor)
+        let current_process = get_process_name_from_args_safe(args);
+        let target_package = TARGET_CONFIG.get().map(|s| s.as_str()).unwrap_or("");
+
+        if !target_package.is_empty() && current_process.contains(target_package) {
+            info!("Target '{}'. Preparing FD access...", current_process);
+
+            // Use Zygisk API to get FD to module folder (we have root access here)
+            let module_dir_fd = api.get_module_dir();
+
+            if module_dir_fd >= 0 {
+                // Open the payload.so file using 'openat' (relative to dir FD)
+                // We have to be unsafe because we are calling the C library directly.
+                let c_filename = CString::new(PAYLOAD_FILENAME).unwrap();
+
+                let payload_fd = unsafe {
+                    libc::openat(
+                        module_dir_fd,
+                        c_filename.as_ptr(),
+                        libc::O_RDONLY,
+                        0
+                    )
+                };
+
+                if payload_fd >= 0 {
+                    info!("Payload FD opened: {}", payload_fd);
+
+                    // Tell Zygisk to close this FD when it's finished
+                    // BUT don't close it now, exclude it from automatic closing during specialization
+                    api.exempt_fd(payload_fd);
+
+                    let _ = PAYLOAD_FD.set(payload_fd);
+                } else {
+                    error!("Failed to open payload.so via FD. File exists? Errno: {}", payload_fd);
+                }
+            } else {
+                error!("Failed to get module dir FD");
+            }
+        }
     }
 
     fn post_app_specialize(&self, _api: ZygiskApi, args: &AppSpecializeArgs) {
-        // Get process name from AppSpecializeArgs (nice_name is guaranteed to exist)
         let current_process = get_process_name_from_args_safe(args);
+        let target_package = TARGET_CONFIG.get().map(|s| s.as_str()).unwrap_or("");
 
-        if current_process.is_empty() {
-            error!("Failed to get process name from AppSpecializeArgs!");
-            return;
-        }
+        if !target_package.is_empty() && current_process.contains(target_package) {
+            if let Some(fd) = PAYLOAD_FD.get() {
+                // We will do a dlopen using the path /proc/self/fd/{fd}
+                // This allows us to load files without namespace-blocked absolute paths.
+                let path = format!("/proc/self/fd/{}", fd);
+                info!("Injecting via FD path: {}", path);
 
-        debug!("Checking process: '{}'", current_process);
-
-        // Read Target Config
-        let target_package = match read_target_config() {
-            Ok(target) => target,
-            Err(e) => {
-                error!("Failed to read config in {}: {:?}", CONFIG_PATH, e);
-                return;
-            }
-        };
-
-        if current_process.contains(target_package.trim()) {
-            info!("Target Match! Process: '{}' matches Target: '{}'", current_process, target_package);
-            info!("Attempting Injection: {}", PAYLOAD_PATH);
-
-            unsafe {
-                inject_payload(PAYLOAD_PATH);
+                unsafe {
+                    inject_payload(&path);
+                }
+            } else {
+                info!("No FD found. Skipping injection.");
             }
         }
     }
 }
 
-// Helper Functions
-
+// Helper: Read Config
 fn read_target_config() -> std::io::Result<String> {
     let f = File::open(CONFIG_PATH)?;
     let mut reader = BufReader::new(f);
     let mut line = String::new();
-
     reader.read_line(&mut line)?;
-
     Ok(line.trim().to_string())
 }
 
+// Helper: dlopen standard
 unsafe fn inject_payload(path: &str) {
     let c_path = CString::new(path).unwrap();
-
     let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW);
 
     if handle.is_null() {
         let err_ptr = libc::dlerror();
-        if !err_ptr.is_null() {
-            let err_msg = CStr::from_ptr(err_ptr).to_string_lossy();
-            error!("Fail Load Payload: {}", err_msg);
+        let err_msg = if !err_ptr.is_null() {
+            CStr::from_ptr(err_ptr).to_string_lossy().into_owned()
         } else {
-            error!("Fail Load Payload: Unknown error");
-        }
+            "Unknown error".to_string()
+        };
+        error!("dlopen failed: {}", err_msg);
     } else {
-        info!("Payload successfully loaded! Handle: {:p}", handle);
+        info!("Payload loaded successfully! Handle: {:p}", handle);
     }
 }
 
-// Helper function to extract process name from AppSpecializeArgs
-// This function gets a valid JNIEnv for the current process and extracts the string
+// Helper: Get App Data Dir String
+fn get_app_data_dir_string(args: &AppSpecializeArgs) -> Option<String> {
+    if let Some(vm) = JAVA_VM.get() {
+        if let Ok(env) = vm.attach_current_thread_as_daemon() {
+            let jstring = *args.app_data_dir;
+            if let Ok(s) = env.get_string(jstring) {
+                return Some(s.into());
+            }
+        }
+    }
+    None
+}
+
+// Helper: Get Process Name
 fn get_process_name_from_args_safe(args: &AppSpecializeArgs) -> String {
-    // Try to get JavaVM and attach to current thread to get valid JNIEnv
     if let Some(vm) = JAVA_VM.get() {
         match vm.attach_current_thread_as_daemon() {
             Ok(env) => {
-                // First try to get the process name from nice_name (usually the package name or process name)
-                // args.nice_name is &mut JString<'a>. We need to dereference it (*args.nice_name)
-                // to get JString that can be owned by env.get_string.
                 let nice_name_jstring = *args.nice_name;
                 if let Ok(nice_name_str) = env.get_string(nice_name_jstring) {
                     let nice_name_rust: String = nice_name_str.into();
                     if !nice_name_rust.is_empty() {
-                        debug!("Got process name from nice_name: '{}'", nice_name_rust);
                         return nice_name_rust;
                     }
                 }
-
-                // If nice_name is empty, try to get from app_data_dir
-                // args.app_data_dir is &mut JString<'a>. We need to dereference it (*args.app_data_dir)
-                // to get JString that can be owned by env.get_string.
                 let app_data_dir_jstring = *args.app_data_dir;
                 if let Ok(app_data_dir_str) = env.get_string(app_data_dir_jstring) {
-                    // Perbaikan: Tambahkan anotasi tipe String juga di sini
                     let app_data_dir_rust: String = app_data_dir_str.into();
                     if !app_data_dir_rust.is_empty() {
-                        // Extract package name from app_data_dir path
-                        // Format is typically: /data/user/0/com.android.chrome or /data/data/com.example.package
-                        let package_name = extract_package_from_path(&app_data_dir_rust);
-                        if !package_name.is_empty() {
-                            debug!("Got process name from app_data_dir: '{}'", package_name);
-                            return package_name;
-                        }
+                        return extract_package_from_path(&app_data_dir_rust);
                     }
                 }
             },
             Err(e) => {
-                error!("Failed to attach JVM in post_app_specialize: {:?}", e);
+                error!("Failed to attach JVM: {:?}", e);
             }
         }
-    } else {
-        error!("JavaVM not initialized");
     }
-
-    // If both fail, return empty string (fallback will use /proc/self/cmdline)
     String::new()
 }
 
-// Helper function to extract package name from app data directory path
+// Helper: Extract Package Name
 fn extract_package_from_path(path: &str) -> String {
-    // Path format: /data/user/0/com.android.chrome or /data/data/com.example.package
     let parts: Vec<&str> = path.split('/').collect();
     if parts.len() >= 3 {
-        // Get the last non-empty part which should be the package name
         for part in parts.iter().rev() {
             if !part.is_empty() {
                 return part.to_string();
