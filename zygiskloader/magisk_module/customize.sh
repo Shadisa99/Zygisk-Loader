@@ -70,9 +70,8 @@ if [ "$ARCH" = "x86" ] || [ "$ARCH" = "x64" ]; then
   fi
 fi
 
+mkdir -p "$MODPATH/config"
+echo "placeholder.package.name" > "$MODPATH/config/target"
 
-echo "placeholder.package.name" > "$MODPATH/active_config.txt"
-
-set_perm_recursive "$MODPATH" 0 0 0755 0644
-
-ui_print "- Finish"
+set_perm_recursive $MODPATH 0 0 0755 0644
+set_perm_recursive $MODPATH/config 0 0 0755 0644
