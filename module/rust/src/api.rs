@@ -97,7 +97,7 @@ impl<'a> ZygiskApi<'a> {
     /// memory unsafety.
     pub unsafe fn hook_jni_native_methods(
         &self,
-        env: JNIEnv,
+        env: &mut JNIEnv,
         class_name: &JNIStr,
         methods: &mut [JNINativeMethod],
     ) {
